@@ -1,0 +1,34 @@
+{
+  "version_id": "v_20261113_49a3ff8e3721",
+  "hash_inputs": {
+    "snapshot_md5": "80c3d27785792b04930266b05bd026d4",
+    "correction_md5": null,
+    "config_canonical": "{\"data_path\":\"data/snapshots/synthetic_full.csv\",\"output_dir\":\"output\",\"col_unit\":\"region_id\",\"col_time\":\"month\",\"col_outcome\":\"y\",\"col_treat\":\"treat\",\"col_first_treat\":\"first_treat_month\",\"never_treat_code\":\"never\",\"covariates\":[\"x1\",\"x2\"],\"window_start\":\"2022-01-01\",\"window_end\":\"2023-12-01\",\"control_group\":\"never-treated\",\"pretest_window\":[-3,-1],\"es_weight\":\"group\",\"cluster_level\":\"unit\",\"seed\":20240101,\"biters\":1000,\"min_group_size\":5,\"fully_missing_cov_rule\":\"exclude\"}",
+    "window_start": "2022-01-01",
+    "window_end": "2023-12-01",
+    "control_group": "never-treated",
+    "es_weight": "group",
+    "pretest_window": [-3, -1],
+    "cluster_level": "unit",
+    "seed": 20240101,
+    "biters": 1000,
+    "n_rows_analytic": 1389,
+    "R_version": "4.3.3",
+    "did_version": "2.1.2",
+    "data_table_version": "1.17.8"
+  },
+  "did_version": "2.1.2",
+  "r_version": "4.3.3",
+  "tag": "never",
+  "config_path": "/workspace/r_did_pipeline/config/never.json",
+  "output_dir": "output/v_20261113_49a3ff8e3721_never",
+  "files": {
+    "group_time_att": "group_time_att.csv",
+    "event_study": "event_study.csv",
+    "event_study_weights": "event_study_weights.csv",
+    "pretrend": "pretrend_test.csv",
+    "identifiability": "identifiability.csv",
+    "excluded_regions": "excluded_regions.csv",
+    "missing_months": "missing_months.csv"
+  }
+}

@@ -1,0 +1,3 @@
+region_id,reason,detail
+R058,treat_status_conflict,观察 treat=0 但按首次暴露月应为 1 @2023-02-01
+R059,covariates_fully_missing,"全部行的协变量缺失: x1,x2"

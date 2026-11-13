@@ -1,0 +1,37 @@
+{
+  "version_id": "v_20261113_8fe49f21a63a_neverfail",
+  "panel": {
+    "window_start": "2022-01-01",
+    "window_end": "2023-12-01",
+    "n_periods": 24,
+    "n_regions_input": 60,
+    "n_regions_analytic": 58,
+    "n_rows_window": 1390,
+    "n_rows_analytic": 1389,
+    "n_missing_register": 3,
+    "n_quarantined": 1,
+    "n_covariate_excluded": 1,
+    "n_corrections": 0,
+    "covariates": ["x1", "x2"],
+    "never_treated_units": 0,
+    "treated_cohorts": 4
+  },
+  "identifiability_summary": [
+    {
+      "n_cells": 96,
+      "n_identifiable": 0,
+      "n_unidentifiable": 96
+    }
+  ],
+  "nonid_reasons": [
+    {
+      "nonid_reason": "no_earlier_period_for_varying_base_period",
+      "N": 4
+    },
+    {
+      "nonid_reason": "no_never_treated_units_available",
+      "N": 92
+    }
+  ],
+  "note": "无合法对照组，未生成估计与图形"
+}

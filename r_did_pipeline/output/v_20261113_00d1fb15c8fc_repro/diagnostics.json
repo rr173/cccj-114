@@ -1,0 +1,69 @@
+{
+  "version_id": "v_20261113_00d1fb15c8fc_repro",
+  "panel": {
+    "window_start": "2022-01-01",
+    "window_end": "2023-12-01",
+    "n_periods": 24,
+    "n_regions_input": 60,
+    "n_regions_analytic": 58,
+    "n_rows_window": 1390,
+    "n_rows_analytic": 1389,
+    "n_missing_register": 3,
+    "n_quarantined": 1,
+    "n_covariate_excluded": 1,
+    "n_corrections": 0,
+    "covariates": ["x1", "x2"],
+    "never_treated_units": 28,
+    "treated_cohorts": 4
+  },
+  "identifiability_summary": [
+    {
+      "n_cells": 96,
+      "n_identifiable": 92,
+      "n_unidentifiable": 4
+    }
+  ],
+  "nonid_reasons": [
+    {
+      "nonid_reason": "no_earlier_period_for_varying_base_period",
+      "N": 4
+    }
+  ],
+  "pretrend": [
+    {
+      "test": "pre_trend_wald_inffunc",
+      "window": "[-3,-1]",
+      "statistic": 0.8879,
+      "p_value": 0.8284,
+      "n_event_periods": 3,
+      "note": "H0: 窗口内所有事件期 ATT=0（基于影响函数的 Wald 卡方检验）；p>0.05 表示无显著处理前效应"
+    }
+  ],
+  "twfe_comparison": [
+    {
+      "estimator": "twfe_event_pooled",
+      "coefficient": "treat",
+      "estimate": 3.4186,
+      "se": 0.078,
+      "t_value": 43.8288,
+      "p_value": 7.2064e-259,
+      "note": "普通双向固定效应，存在异质处理效应时可能有偏；仅作对照，非目标估计"
+    }
+  ],
+  "target_vs_twfe": [
+    {
+      "twfe_estimate": 3.4186,
+      "event_study_post_mean": 2.861,
+      "note": "二者差异即异质效应下 TWFE 偏差的描述性证据；目标估计以 CS 为准"
+    }
+  ],
+  "aggregation_check": [
+    {
+      "es_weight": "group",
+      "max_manual_vs_did_abs_diff": 0,
+      "simple_vs_did_overall_diff": 0.1156,
+      "weight_sum_tolerance": 1e-08,
+      "all_weight_sums_equal_one": true
+    }
+  ]
+}

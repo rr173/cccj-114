@@ -1,0 +1,4 @@
+region_id,missing_month,reason,detail
+R001,2022-08-01,missing_row,月份完全无记录
+R001,2022-09-01,missing_row,月份完全无记录
+R002,2022-12-01,outcome_na_row,行存在但结果 y 缺失

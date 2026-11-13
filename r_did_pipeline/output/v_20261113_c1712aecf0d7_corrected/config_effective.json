@@ -1,0 +1,22 @@
+{
+  "data_path": "data/snapshots/synthetic_full.csv",
+  "output_dir": "output",
+  "correction_path": "data/corrections/synthetic_full_corrections.csv",
+  "col_unit": "region_id",
+  "col_time": "month",
+  "col_outcome": "y",
+  "col_treat": "treat",
+  "col_first_treat": "first_treat_month",
+  "never_treat_code": "never",
+  "covariates": ["x1", "x2"],
+  "window_start": "2022-01-01",
+  "window_end": "2023-12-01",
+  "control_group": "not-yet-treated",
+  "pretest_window": [-3, -1],
+  "es_weight": "group",
+  "cluster_level": "unit",
+  "seed": 20240101,
+  "biters": 1000,
+  "min_group_size": 5,
+  "fully_missing_cov_rule": "exclude"
+}

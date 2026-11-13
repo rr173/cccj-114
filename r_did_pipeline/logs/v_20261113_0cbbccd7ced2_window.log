@@ -1,0 +1,27 @@
+2026-11-13 15:13:02 | ==== 管线开始 | 版本 v_20261113_0cbbccd7ced2_window ====
+2026-11-13 15:13:02 | 结果身份: {"snapshot_md5":"80c3d27785792b04930266b05bd026d4","correction_md5":null,"config_canonical":"{\"data_path\":\"data/snapshots/synthetic_full.csv\",\"output_dir\":\"output\",\"col_unit\":\"region_id\",\"col_time\":\"month\",\"col_outcome\":\"y\",\"col_treat\":\"treat\",\"col_first_treat\":\"first_treat_month\",\"never_treat_code\":\"never\",\"covariates\":[\"x1\",\"x2\"],\"window_start\":\"2022-03-01\",\"window_end\":\"2023-09-01\",\"control_group\":\"not-yet-treated\",\"pretest_window\":[-3,-1],\"es_weight\":\"simple\",\"cluster_level\":\"time\",\"seed\":777,\"biters\":1000,\"min_group_size\":5,\"fully_missing_cov_rule\":\"exclude\"}","window_start":"2022-03-01","window_end":"2023-09-01","control_group":"not-yet-treated","es_weight":"simple","pretest_window":[-3,-1],"cluster_level":"time","seed":777,"biters":1000,"n_rows_analytic":1099,"R_version":"4.3.3","did_version":"2.1.2","data_table_version":"1.17.8"}
+2026-11-13 15:13:02 | 可识别性检查: 76 个组别-时点单元格, 4 个不可识别（将记录原因，不输出零）
+2026-11-13 15:13:02 | 不可识别原因分布: no_earlier_period_for_varying_base_period=4
+2026-11-13 15:13:06 | 聚类层级: 时间（月份）—— 影响函数按时间聚合，非 did 原生 bootstrap
+2026-11-13 15:13:06 | 调用 did::att_gt | control=not-yet-treated | seed=777 | biters=1000 | 协变量=x1+x2
+2026-11-13 15:13:08 | att_gt 完成: 72 个可估计单元格；不可识别 4 个（NA + 原因）
+2026-11-13 15:13:09 | 权重总和核对通过: 32 个事件期两套权重和均为 1（容差 1e-8）
+2026-11-13 15:13:09 | 等权核对：手工 post 等权均值=2.7951 vs did simple 总效应=2.891 差=0.09593
+2026-11-13 15:13:09 | group 计数近似 vs did dynamic(IPW) 最大绝对差: 0（留痕，非失败条件）
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/analytic_panel.csv (1099 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/group_time_att.csv (76 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/event_study.csv (32 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/event_study_weights.csv (72 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/weight_sums.csv (32 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/group_summary.csv (4 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/calendar_summary.csv (16 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/pretrend_test.csv (1 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/twfe_diagnostic.csv (1 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/identifiability.csv (76 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/excluded_regions.csv (2 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/missing_months.csv (3 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/time_map.csv (19 行)
+2026-11-13 15:13:09 | 写出: output/v_20261113_0cbbccd7ced2_window/cohort_map.csv (4 行)
+2026-11-13 15:13:10 | 诊断图已写出: fig_event_study.png / fig_group_time_heatmap.png / fig_weight_sums.png
+2026-11-13 15:13:10 | 诊断清单写出: diagnostics.json
+2026-11-13 15:13:10 | ==== 管线完成 | 版本目录 output/v_20261113_0cbbccd7ced2_window ====

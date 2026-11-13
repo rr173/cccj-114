@@ -1,0 +1,9 @@
+2026-11-13 14:22:48 | ==== 管线开始 | 版本 v_20261113_337616e96b59_ndebug ====
+2026-11-13 14:22:48 | 结果身份: {"snapshot_md5":"4088b1ade714096c8bbeecb7807b6e3e","correction_md5":null,"config_canonical":"{\"data_path\":\"data/snapshots/synthetic_no_never.csv\",\"output_dir\":\"output\",\"col_unit\":\"region_id\",\"col_time\":\"month\",\"col_outcome\":\"y\",\"col_treat\":\"treat\",\"col_first_treat\":\"first_treat_month\",\"never_treat_code\":\"never\",\"covariates\":[\"x1\",\"x2\"],\"window_start\":\"2022-01-01\",\"window_end\":\"2023-12-01\",\"control_group\":\"not-yet-treated\",\"pretest_window\":[-3,-1],\"es_weight\":\"group\",\"cluster_level\":\"unit\",\"seed\":20240101,\"biters\":1000,\"min_group_size\":5,\"fully_missing_cov_rule\":\"exclude\"}","window_start":"2022-01-01","window_end":"2023-12-01","control_group":"not-yet-treated","es_weight":"group","pretest_window":[-3,-1],"cluster_level":"unit","seed":20240101,"biters":1000,"n_rows_analytic":1389,"R_version":"4.3.3","did_version":"2.1.2","data_table_version":"1.17.8"}
+2026-11-13 14:22:48 | 可识别性检查: 96 个组别-时点单元格, 26 个不可识别（将记录原因，不输出零）
+2026-11-13 14:22:48 | 不可识别原因分布: not_yet_treated_controls_exhausted=26
+2026-11-13 14:22:50 | 聚类层级: 地区（did bootstrap）
+2026-11-13 14:22:50 | 调用 did::att_gt | control=not-yet-treated | seed=20240101 | biters=1000 | 协变量=x1+x2
+2026-11-13 14:22:51 | att_gt 完成: 54 个可估计单元格；不可识别 0 个（NA + 原因）
+2026-11-13 14:22:51 | 权重总和核对通过: 26 个事件期权重和均为 1（容差 1e-8）
+2026-11-13 14:22:51 | group 权重：手工重算 vs did dynamic 最大绝对差: 0.121

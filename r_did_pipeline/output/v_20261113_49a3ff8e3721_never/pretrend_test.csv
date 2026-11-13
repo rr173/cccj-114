@@ -1,0 +1,2 @@
+test,window,statistic,p_value,n_event_periods,note
+pre_trend_wald_inffunc,"[-3,-1]",1.35487699484342,0.716145044354102,3,H0: 窗口内所有事件期 ATT=0（基于影响函数的 Wald 卡方检验）；p>0.05 表示无显著处理前效应

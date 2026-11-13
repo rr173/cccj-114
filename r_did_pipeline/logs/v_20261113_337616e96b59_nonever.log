@@ -1,0 +1,27 @@
+2026-11-13 15:13:11 | ==== 管线开始 | 版本 v_20261113_337616e96b59_nonever ====
+2026-11-13 15:13:11 | 结果身份: {"snapshot_md5":"4088b1ade714096c8bbeecb7807b6e3e","correction_md5":null,"config_canonical":"{\"data_path\":\"data/snapshots/synthetic_no_never.csv\",\"output_dir\":\"output\",\"col_unit\":\"region_id\",\"col_time\":\"month\",\"col_outcome\":\"y\",\"col_treat\":\"treat\",\"col_first_treat\":\"first_treat_month\",\"never_treat_code\":\"never\",\"covariates\":[\"x1\",\"x2\"],\"window_start\":\"2022-01-01\",\"window_end\":\"2023-12-01\",\"control_group\":\"not-yet-treated\",\"pretest_window\":[-3,-1],\"es_weight\":\"group\",\"cluster_level\":\"unit\",\"seed\":20240101,\"biters\":1000,\"min_group_size\":5,\"fully_missing_cov_rule\":\"exclude\"}","window_start":"2022-01-01","window_end":"2023-12-01","control_group":"not-yet-treated","es_weight":"group","pretest_window":[-3,-1],"cluster_level":"unit","seed":20240101,"biters":1000,"n_rows_analytic":1389,"R_version":"4.3.3","did_version":"2.1.2","data_table_version":"1.17.8"}
+2026-11-13 15:13:12 | 可识别性检查: 96 个组别-时点单元格, 42 个不可识别（将记录原因，不输出零）
+2026-11-13 15:13:12 | 不可识别原因分布: no_earlier_period_for_varying_base_period=3 | no_later_cohort_for_not_yet_treated_group=24 | not_yet_treated_controls_exhausted=15
+2026-11-13 15:13:22 | 聚类层级: 地区（did bootstrap）
+2026-11-13 15:13:22 | 调用 did::att_gt | control=not-yet-treated | seed=20240101 | biters=1000 | 协变量=x1+x2
+2026-11-13 15:13:24 | att_gt 完成: 54 个可估计单元格；不可识别 42 个（NA + 原因）
+2026-11-13 15:13:26 | 权重总和核对通过: 26 个事件期两套权重和均为 1（容差 1e-8）
+2026-11-13 15:13:26 | 等权核对：手工 post 等权均值=2.9957 vs did simple 总效应=3.3594 差=0.3637
+2026-11-13 15:13:26 | group 计数近似 vs did dynamic(IPW) 最大绝对差: 0.121（留痕，非失败条件）
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/analytic_panel.csv (1389 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/group_time_att.csv (96 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/event_study.csv (26 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/event_study_weights.csv (54 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/weight_sums.csv (26 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/group_summary.csv (3 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/calendar_summary.csv (14 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/pretrend_test.csv (1 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/twfe_diagnostic.csv (1 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/identifiability.csv (96 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/excluded_regions.csv (2 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/missing_months.csv (3 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/time_map.csv (24 行)
+2026-11-13 15:13:26 | 写出: output/v_20261113_337616e96b59_nonever/cohort_map.csv (4 行)
+2026-11-13 15:13:28 | 诊断图已写出: fig_event_study.png / fig_group_time_heatmap.png / fig_weight_sums.png
+2026-11-13 15:13:29 | 诊断清单写出: diagnostics.json
+2026-11-13 15:13:29 | ==== 管线完成 | 版本目录 output/v_20261113_337616e96b59_nonever ====

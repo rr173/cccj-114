@@ -1,0 +1,2 @@
+estimator,coefficient,estimate,se,t_value,p_value,note
+twfe_event_pooled,treat,3.39772247580609,0.0923884671965579,36.7764784816419,2.69250479590664e-189,普通双向固定效应，存在异质处理效应时可能有偏；仅作对照，非目标估计
