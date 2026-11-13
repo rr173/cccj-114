@@ -1,0 +1,3 @@
+region_id,revision,op,first_treat_month
+R001,1,upsert,never
+R002,1,upsert,never

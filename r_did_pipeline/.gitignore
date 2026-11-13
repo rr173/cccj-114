@@ -1,0 +1,7 @@
+# 本地接入账本与导出（运行时产物，不入库）
+data/ledger/*.sqlite
+data/ledger/*.sqlite-wal
+data/ledger/*.sqlite-shm
+exports/
+output/
+logs/

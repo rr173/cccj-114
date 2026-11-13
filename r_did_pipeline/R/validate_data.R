@@ -107,7 +107,8 @@ load_or_validate <- function(cfg) {
     data.table::fifelse(month >= first_treat, 1L, 0L))]
   conflict <- dt[!is.na(treat) & treat != expected_treat]
   conflict_regions <- unique(conflict$region_id)
-  quarantined <- data.table()
+  quarantined <- data.table(region_id = character(), reason = character(),
+                            detail = character())
   if (length(conflict_regions) > 0L) {
     quarantined <- conflict[, .(
       reason = "treat_status_conflict",
