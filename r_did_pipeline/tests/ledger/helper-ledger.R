@@ -30,6 +30,7 @@ source(file.path(LEDGER_TEST_ROOT, "R", "ledger", "validate.R"))
 source(file.path(LEDGER_TEST_ROOT, "R", "ledger", "ingest.R"))
 source(file.path(LEDGER_TEST_ROOT, "R", "ledger", "export.R"))
 source(file.path(LEDGER_TEST_ROOT, "R", "ledger", "query.R"))
+source(file.path(LEDGER_TEST_ROOT, "R", "ledger", "preview.R"))
 
 LEDGER_TEST_R <- file.path(LEDGER_TEST_ROOT, "..", ".envs", "r-ledger", "bin",
                            "Rscript")

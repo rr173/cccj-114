@@ -377,6 +377,132 @@ write_arrival_rows <- function(con, outcomes, kind, batch_id, received_at) {
   invisible(NULL)
 }
 
+# ---- 事务内主体：正式导入与批次预演共用 --------------------------------------
+# 调用前提：调用者已持有写事务（BEGIN IMMEDIATE）。
+#   finalize = TRUE  （正式导入）：写版本行 + 当前指针 + 回执 + 逐行结果 +
+#                                过时/重复来件，随后由调用者提交；
+#   finalize = FALSE （批次预演）：只写版本行与当前指针，供同事务内重算
+#                                导出视图；调用者随后整体回滚，因此回执、
+#                                逐行结果、来件记录对预演无意义，不写入。
+# 返回 list(replay, summary, m, r, applied)；replay=TRUE 时只有 summary 有效。
+ingest_tx_core <- function(con, monthly, registration, batch_id, content_md5,
+                           source_id, received_at, opts = list(),
+                           finalize = TRUE) {
+  # 写锁内二次检查：两个进程同时重传同一批次时，后者在这里看到已提交回执
+  again <- check_replay(con, source_id, batch_id, content_md5)
+  if (!is.null(again)) {
+    out <- again$summary
+    out$replay <- TRUE
+    return(list(replay = TRUE, summary = out))
+  }
+
+  m_state <- load_monthly_state(con)
+  r_state <- load_registration_state(con)
+  m <- if (!is.null(monthly))
+    classify_rows(monthly$rows, m_state, LEDGER_KIND_MONTHLY,
+                  c("region_id", "month")) else
+    list(incoming = empty_incoming(LEDGER_KIND_MONTHLY),
+         outcomes = classify_outcomes_empty(LEDGER_KIND_MONTHLY),
+         n_duplicate = 0L, n_stale = 0L, n_applied = 0L)
+  r <- if (!is.null(registration))
+    classify_rows(registration$rows, r_state, LEDGER_KIND_REGISTRATION,
+                  "region_id") else
+    list(incoming = empty_incoming(LEDGER_KIND_REGISTRATION),
+         outcomes = classify_outcomes_empty(LEDGER_KIND_REGISTRATION),
+         n_duplicate = 0L, n_stale = 0L, n_applied = 0L)
+
+  m_ids <- write_version_rows(con, m$incoming, LEDGER_KIND_MONTHLY,
+                              batch_id, received_at)
+  r_ids <- write_version_rows(con, r$incoming, LEDGER_KIND_REGISTRATION,
+                              batch_id, received_at)
+
+  summary <- list(
+    batch_id = batch_id,
+    source_id = source_id,
+    status = "committed",
+    received_at = received_at,
+    file_md5 = content_md5,
+    monthly = list(
+      n_rows_in_file = if (is.null(monthly)) 0L else monthly$n_rows_raw,
+      n_duplicate_in_file =
+        if (is.null(monthly)) 0L else monthly$n_duplicate_in_file,
+      n_applied = m$n_applied, n_stale = m$n_stale,
+      n_duplicate = m$n_duplicate,
+      n_delete = if (nrow(m$incoming) > 0L)
+        as.integer(sum(m$incoming$op == "delete")) else 0L,
+      file_md5 = if (is.null(monthly)) NULL else monthly$md5),
+    registration = list(
+      n_rows_in_file = if (is.null(registration)) 0L
+                       else registration$n_rows_raw,
+      n_duplicate_in_file =
+        if (is.null(registration)) 0L else registration$n_duplicate_in_file,
+      n_applied = r$n_applied, n_stale = r$n_stale,
+      n_duplicate = r$n_duplicate,
+      n_delete = if (nrow(r$incoming) > 0L)
+        as.integer(sum(r$incoming$op == "delete")) else 0L,
+      file_md5 = if (is.null(registration)) NULL else registration$md5),
+    outcomes = list())
+  # 逐条判定里只把「非平凡」结果写进回执（insert/replace/restore/delete/stale），
+  # 完整的逐行表由 ingest_outcome 与 arrival_log 提供。
+  nontrivial <- list()
+  for (o in list(list(kind = "monthly", dt = m$outcomes),
+                 list(kind = "registration", dt = r$outcomes))) {
+    dt <- o$dt
+    if (nrow(dt) == 0L) next
+    dt <- dt[outcome != "insert"]  # insert 是常态，避免回执过大
+    for (i in seq_len(nrow(dt))) {
+      ri <- dt[i]
+      nontrivial[[length(nontrivial) + 1L]] <- list(
+        kind = o$kind,
+        region_id = ri$region_id,
+        month = if (o$kind == "monthly") ri$month else NULL,
+        revision = ri$revision,
+        outcome = ri$outcome)
+    }
+  }
+  summary$outcomes <- nontrivial
+  summary$n_inserted <- nrow(m$outcomes[outcome == "insert"]) +
+    nrow(r$outcomes[outcome == "insert"])
+
+  if (finalize) {
+    # ---- 测试/演练用：事务内可控中断点 -----------------------------------
+    #  interrupt_at = "before_receipt"：抛错 -> 自动回滚（模拟业务校验失败）
+    #  pause_before_commit > 0：写标记文件后休眠，外部可 SIGKILL 进程，
+    #  用于验证“进程被杀 -> 本批完全不可见，重启重传不重复生效”。
+    if (!is.null(opts$interrupt_at) &&
+        opts$interrupt_at %in% c("before_receipt", "before_commit")) {
+      ledger_log("触发测试中断点: ", opts$interrupt_at, "（事务将回滚）")
+      stop_ledger("interrupted_at", paste0("测试中断点: ", opts$interrupt_at))
+    }
+    if (!is.null(opts$pause_before_commit) &&
+        is.finite(as.numeric(opts$pause_before_commit)) &&
+        as.numeric(opts$pause_before_commit) > 0) {
+      if (!is.null(opts$pause_marker) && nzchar(opts$pause_marker))
+        writeLines(as.character(Sys.getpid()), opts$pause_marker)
+      ledger_log("事务内暂停 ", opts$pause_before_commit,
+                 " 秒（已持有写锁，等待外部终止）")
+      Sys.sleep(as.numeric(opts$pause_before_commit))
+    }
+
+    DBI::dbExecute(con, "
+      INSERT INTO receipt(batch_id, source_id, file_md5, status, summary_json, received_at)
+      VALUES (?,?,?,'committed',?,?)",
+      list(batch_id, source_id, content_md5,
+           jsonlite::toJSON(summary, auto_unbox = TRUE, null = "null",
+                            digits = NA),
+           received_at))
+    # 依赖 receipt 的外键行必须在回执之后写
+    write_outcome_rows(con, m$outcomes, LEDGER_KIND_MONTHLY, batch_id)
+    write_outcome_rows(con, r$outcomes, LEDGER_KIND_REGISTRATION, batch_id)
+    write_arrival_rows(con, m$outcomes, LEDGER_KIND_MONTHLY, batch_id,
+                       received_at)
+    write_arrival_rows(con, r$outcomes, LEDGER_KIND_REGISTRATION, batch_id,
+                       received_at)
+  }
+  list(replay = FALSE, summary = summary, m = m, r = r,
+       applied = list(monthly = m_ids, registration = r_ids))
+}
+
 # ---- 主入口 ------------------------------------------------------------------
 # files: list(monthly = path|NULL, registration = path|NULL)
 # opts:  list(batch_id, source_id = NULL, interrupt_at = NULL,
@@ -414,119 +540,12 @@ ingest_batch <- function(con, files, opts) {
   received_at <- now_iso()
   applied <- list(monthly = integer(0), registration = integer(0))
   result <- with_immediate_tx(con, function() {
-    # 写锁内二次检查：两个进程同时重传同一批次时，后者在这里看到已提交回执
-    again <- check_replay(con, source_id, batch_id, content_md5)
-    if (!is.null(again)) {
-      out <- again$summary
-      out$replay <- TRUE
-      return(out)
-    }
-
-    m_state <- load_monthly_state(con)
-    r_state <- load_registration_state(con)
-    m <- if (!is.null(monthly))
-      classify_rows(monthly$rows, m_state, LEDGER_KIND_MONTHLY,
-                    c("region_id", "month")) else
-      list(incoming = empty_incoming(LEDGER_KIND_MONTHLY),
-           outcomes = classify_outcomes_empty(LEDGER_KIND_MONTHLY),
-           n_duplicate = 0L, n_stale = 0L, n_applied = 0L)
-    r <- if (!is.null(registration))
-      classify_rows(registration$rows, r_state, LEDGER_KIND_REGISTRATION,
-                    "region_id") else
-      list(incoming = empty_incoming(LEDGER_KIND_REGISTRATION),
-           outcomes = classify_outcomes_empty(LEDGER_KIND_REGISTRATION),
-           n_duplicate = 0L, n_stale = 0L, n_applied = 0L)
-
-    m_ids <- write_version_rows(con, m$incoming, LEDGER_KIND_MONTHLY,
-                                batch_id, received_at)
-    r_ids <- write_version_rows(con, r$incoming, LEDGER_KIND_REGISTRATION,
-                                batch_id, received_at)
-    applied$monthly <<- m_ids
-    applied$registration <<- r_ids
-
-    summary <- list(
-      batch_id = batch_id,
-      source_id = source_id,
-      status = "committed",
-      received_at = received_at,
-      file_md5 = content_md5,
-      monthly = list(
-        n_rows_in_file = if (is.null(monthly)) 0L else monthly$n_rows_raw,
-        n_duplicate_in_file =
-          if (is.null(monthly)) 0L else monthly$n_duplicate_in_file,
-        n_applied = m$n_applied, n_stale = m$n_stale,
-        n_duplicate = m$n_duplicate,
-        n_delete = if (nrow(m$incoming) > 0L)
-          as.integer(sum(m$incoming$op == "delete")) else 0L,
-        file_md5 = if (is.null(monthly)) NULL else monthly$md5),
-      registration = list(
-        n_rows_in_file = if (is.null(registration)) 0L
-                         else registration$n_rows_raw,
-        n_duplicate_in_file =
-          if (is.null(registration)) 0L
-          else registration$n_duplicate_in_file,
-        n_applied = r$n_applied, n_stale = r$n_stale,
-        n_duplicate = r$n_duplicate,
-        n_delete = if (nrow(r$incoming) > 0L)
-          as.integer(sum(r$incoming$op == "delete")) else 0L,
-        file_md5 = if (is.null(registration)) NULL else registration$md5),
-      outcomes = list())
-    # 逐条判定里只把「非平凡」结果写进回执（insert/replace/restore/delete/stale），
-    # 完整的逐行表由 ingest_outcome 与 arrival_log 提供。
-    nontrivial <- list()
-    for (o in list(list(kind = "monthly", dt = m$outcomes),
-                   list(kind = "registration", dt = r$outcomes))) {
-      dt <- o$dt
-      if (nrow(dt) == 0L) next
-      dt <- dt[outcome != "insert"]  # insert 是常态，避免回执过大
-      for (i in seq_len(nrow(dt))) {
-        ri <- dt[i]
-        nontrivial[[length(nontrivial) + 1L]] <- list(
-          kind = o$kind,
-          region_id = ri$region_id,
-          month = if (o$kind == "monthly") ri$month else NULL,
-          revision = ri$revision,
-          outcome = ri$outcome)
-      }
-    }
-    summary$outcomes <- nontrivial
-    summary$n_inserted <- nrow(m$outcomes[outcome == "insert"]) +
-      nrow(r$outcomes[outcome == "insert"])
-
-    # ---- 测试/演练用：事务内可控中断点 -----------------------------------
-    #  interrupt_at = "before_receipt"：抛错 -> 自动回滚（模拟业务校验失败）
-    #  pause_before_commit > 0：写标记文件后休眠，外部可 SIGKILL 进程，
-    #  用于验证“进程被杀 -> 本批完全不可见，重启重传不重复生效”。
-    if (!is.null(opts$interrupt_at) &&
-        opts$interrupt_at %in% c("before_receipt", "before_commit")) {
-      ledger_log("触发测试中断点: ", opts$interrupt_at, "（事务将回滚）")
-      stop_ledger("interrupted_at", paste0("测试中断点: ", opts$interrupt_at))
-    }
-    if (!is.null(opts$pause_before_commit) &&
-        is.finite(as.numeric(opts$pause_before_commit)) &&
-        as.numeric(opts$pause_before_commit) > 0) {
-      if (!is.null(opts$pause_marker) && nzchar(opts$pause_marker))
-        writeLines(as.character(Sys.getpid()), opts$pause_marker)
-      ledger_log("事务内暂停 ", opts$pause_before_commit,
-                 " 秒（已持有写锁，等待外部终止）")
-      Sys.sleep(as.numeric(opts$pause_before_commit))
-    }
-
-    DBI::dbExecute(con, "
-      INSERT INTO receipt(batch_id, source_id, file_md5, status, summary_json, received_at)
-      VALUES (?,?,?,'committed',?,?)",
-      list(batch_id, source_id, content_md5,
-           jsonlite::toJSON(summary, auto_unbox = TRUE, null = "null",
-                            digits = NA),
-           received_at))
-    # 依赖 receipt 的外键行必须在回执之后写
-    write_outcome_rows(con, m$outcomes, LEDGER_KIND_MONTHLY, batch_id)
-    write_outcome_rows(con, r$outcomes, LEDGER_KIND_REGISTRATION, batch_id)
-    write_arrival_rows(con, m$outcomes, LEDGER_KIND_MONTHLY, batch_id,
-                       received_at)
-    write_arrival_rows(con, r$outcomes, LEDGER_KIND_REGISTRATION, batch_id,
-                       received_at)
-    summary
+    core <- ingest_tx_core(con, monthly, registration, batch_id, content_md5,
+                           source_id, received_at, opts, finalize = TRUE)
+    if (isTRUE(core$replay)) return(core$summary)
+    applied$monthly <<- core$applied$monthly
+    applied$registration <<- core$applied$registration
+    core$summary
   })
 
   # 事务内发现回执（并发重传的后者）时，结果本身就是“重放”，不能覆盖标记

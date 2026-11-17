@@ -140,6 +140,15 @@ with_immediate_tx <- function(con, code) {
   res
 }
 
+# 预演专用：BEGIN IMMEDIATE 取写锁执行代码，结束时**无条件回滚**。
+# 写锁保证执行期间没有其他批次提交（报告的前后两侧基于同一状态）；
+# 回滚保证版本行、当前指针、sqlite_sequence 等都不留任何痕迹。
+with_immediate_tx_rollback <- function(con, code) {
+  begin_immediate(con)
+  on.exit(rollback_tx(con), add = TRUE)
+  code()
+}
+
 # ---- 库身份：source_id 绑定 ----------------------------------------------------
 ledger_meta <- function(con) {
   if (!has_table(con, "meta"))

@@ -20,7 +20,7 @@
 | 协变量全缺地区按规则排除并列明 | 唯一预设规则 `exclude`，写入 `excluded_regions.csv` |
 | 结果文件分别保留各要素 | 估计值/SE/点态与统一 CI/参与组/对照组/有效样本量/事件时间权重/包版本分文件 |
 | 用 did 原始组别结果重算汇总曲线并核对 | `aggregate.R` 双路计算，权重总和=1 核对，等权逐单元格重算自洽性核对 |
-| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出 |
+| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出、批次预演影响报告 |
 
 ## 2. 目录结构
 
@@ -41,10 +41,12 @@ r_did_pipeline/
 │       ├── validate.R         # 批次文件格式与逐行校验（纯函数）
 │       ├── ingest.R           # 回执、修订判定、当前指针、过时/重复来件
 │       ├── export.R           # 一致快照导出、临时目录发布
+│       ├── preview.R          # 批次预演：模拟导入 + 面板/待补差异 + 报告发布
 │       ├── query.R            # 当前/历史/回执/批次判定/发布查询
 │       ├── cli.R              # 命令行公共层与 JSON 错误契约
 │       ├── init_ledger.R      # CLI：初始化/校验绑定
 │       ├── import_batch.R     # CLI：导入批次
+│       ├── preview_batch.R    # CLI：批次预演（影响报告，不提交数据）
 │       ├── export_panel.R     # CLI：导出现行月表与来源
 │       ├── query_ledger.R     # CLI：查询账本
 │       ├── make_demo_batches.R# 生成可直接运行的演示批次
@@ -213,6 +215,12 @@ $LEDGER_R R/ledger/query_ledger.R --db "$DB" --what check      # 不变量自检
 
 # 4) 导出（每次生成新的 release 目录，不覆盖旧导出）
 $LEDGER_R R/ledger/export_panel.R --db "$DB" --out "$OUT"
+
+# 5) 批次预演：生成影响报告但不提交数据（详见 8.9）
+$LEDGER_R R/ledger/preview_batch.R --db "$DB" --batch-id D09 \
+  --monthly data/ledger_demo/monthly/d02_monthly.csv \
+  --registration data/ledger_demo/registration/d02_registration.csv \
+  --report reports/D09_preview.json
 ```
 
 - 所有命令向 stdout 输出**一行 JSON**，日志写 stderr。
@@ -326,7 +334,7 @@ $LEDGER_R R/ledger/ledger_demo.R --workdir /tmp/ledger_demo
 ```bash
 LEDGER_R=/workspace/.envs/r-ledger/bin/Rscript
 
-# 全部账本测试（临时库；353 项断言；不依赖 did 拟合）
+# 全部账本测试（临时库；573 项断言；不依赖 did 拟合）
 $LEDGER_R tests/ledger/run_tests.R
 $LEDGER_R tests/ledger/run_tests.R concurrency   # 只跑多进程部分
 
@@ -346,8 +354,124 @@ $LEDGER_R R/ledger/concurrency_demo.R --workdir /tmp/ledger_cc --pause 60
 | `test-revision-semantics.R` | 随机到达顺序下与参考实现一致；删除后低版本永不复活；顺序无关性 |
 | `test-export.R` | 待补登记、登记撤回、treat 重算、缺月/缺值保留、逐行来源、发布不覆盖、失败保留旧导出、一致快照 |
 | `test-concurrency.R` | **实际启动两个写入进程**并发导入不同批次；同批次两进程一提交一重放；**SIGKILL 停在提交前的导入进程**后核对回执/当前数据/历史记录一致，重启重传只生效一次；CLI 退出码 |
+| `test-preview.R` | 批次预演：混合批次逐行结果与面板/待补差异（含修订来源）、登记更正跨月重算与撤回待补变化、月报删除/恢复、同版本冲突与文件校验错误的整批拒绝报告、已有 batch_id 的重放标记与不同内容拒绝、预演前后账本各表（含 sqlite_sequence）不变、**两进程并发时预演边界与报告一致**、预测面板与紧接着正式导入后的导出逐行对照、报告发布原子性（失败不覆盖已有报告）、CLI 契约 |
 | `test-cli.R` | README 中的 CLI 命令可直接运行、幂等初始化、错误 JSON |
 | `test-pipeline-handoff.R` | 导出 `panel.csv` 通过既有 `validate_data.R` 校验；缺月/缺值不被填充 |
 
 > 账本测试与 `validate_pipeline.R` 相互独立：前者只验证接入、拼接与导出契约，
 > 不调用 `did::att_gt`，因此在没有 did 的环境中也能全部通过。
+
+## 8.9 批次预演：导入前生成影响报告，不提交数据
+
+运营人员收到一批月报/登记后，通常要先确认这批数据会怎样改变分析面板，
+再决定是否正式导入。`preview_batch.R` 与正式导入接收**完全相同**的输入
+（月报文件、登记文件、batch_id），输出一份可复核的影响报告，但**不在账本
+中留下任何痕迹**；同一 `batch_id` 之后仍可正式导入，修正文件时仍按原有
+batch_id 冲突规则处理。
+
+```bash
+$LEDGER_R R/ledger/preview_batch.R --db "$DB" --batch-id D09 \
+  --monthly incoming/d09_monthly.csv \
+  --registration incoming/d09_registration.csv \
+  --report reports/D09_preview.json
+```
+
+- 预演使用与正式导入**同一套**文件校验、批内冲突判断、修订比较与重放规则
+  （同一批函数：解析/契约/内容指纹/回执检查/逐行裁决/版本行写入），
+  模拟在单个 `BEGIN IMMEDIATE` 事务内进行，结束时**无条件回滚**。
+- 写锁保证预演期间没有其他批次提交：报告的“预演前 / 预演后”两侧与状态
+  边界来自**同一个账本状态**，并发导入不会混入。
+- 退出码：`0` 预演完成并已发布报告（看 `verdict` 字段）；`2` 预演本身被
+  拒绝（如该 batch_id 已有**不同内容**的成功回执、参数或库问题），此时
+  不写报告；`1` 内部错误。
+- 报告写到 `--report` 指定的位置：全部内容生成成功后先写同目录临时文件
+  再原子重命名发布；预演失败不会覆盖调用者已有的报告。
+
+### 报告结论（verdict）
+
+| verdict | 含义 |
+| --- | --- |
+| `would_commit` | 批次可导入；报告给出逐行结果、面板/待补差异与预测面板 |
+| `replay` | 该 batch_id 已有**相同文件**的成功回执；按正式导入规则这是重放，**不模拟再次生效**，面板与待补清单不变 |
+| `would_reject` | 批次会被整批拒绝；报告给出拒绝原因与冲突/错误行 |
+
+### 报告格式（单个 JSON 文件）
+
+```jsonc
+{
+  "report_type": "batch_preview",
+  "report_version": 1,
+  "generated_at": "...", "db_path": "...", "source_id": "...", "batch_id": "D09",
+  "verdict": "would_commit",
+  "files": {                       // 输入文件身份（md5 与行数）
+    "monthly":      {"path": "...", "md5": "...", "n_rows": 72, "n_duplicate_in_file": 0},
+    "registration": {"path": "...", "md5": "...", "n_rows": 2,  "n_duplicate_in_file": 0},
+    "content_md5": "..."           // 与回执相同公式的批次内容指纹
+  },
+  "state_boundary": {              // 本次预演所依据的账本状态（可核对边界）
+    "max_monthly_record_id": 123, "max_registration_record_id": 45,
+    "n_monthly_versions": 123, "n_registration_versions": 45,
+    "sqlite_data_version": 7,
+    "note": "以上边界只是本次预演所依据的账本状态；报告的预演前/预演后两侧均在同一个 BEGIN IMMEDIATE 事务内读取（随后已回滚），并发导入不会混入。..."
+  },
+  "rejection": null,               // would_reject 时：{error_code, message, offending_rows[]}
+  "replay": null,                  // replay 时：{received_at, original_summary, note}
+  "row_outcomes": [                // 逐行结果（与 ingest_outcome 同形）
+    {"kind": "monthly", "csv_row": 2, "region_id": "R001", "month": "2022-06",
+     "revision": 2, "op": "upsert", "outcome": "replace"}
+    // outcome ∈ insert(新增) replace(替换) restore(恢复) delete(删除)
+    //             stale(判为过时) duplicate(判为重复)
+  ],
+  "outcome_counts": {"insert": 70, "replace": 2, "restore": 0, "delete": 0,
+                     "stale": 0, "duplicate": 0},
+  "panel_diff": {                  // 分析面板前后对比，按地区与月份逐行
+    "counts": {"added": 2, "changed": 1, "removed": 0, "unchanged": 45},
+    "rows": [
+      {"region_id": "R001", "month": "2022-06", "status": "changed",
+       "changed_fields": ["y", "treat"],
+       "before": {"y": 1.5, "x1": 0.1, "x2": null, "first_treat_month": "2022-06",
+                  "treat": 1,
+                  "monthly_revision": 1, "monthly_batch_id": "D01",
+                  "registration_revision": 1, "registration_batch_id": "D01"},
+       "after":  {"y": 2.5, "...": "...", "monthly_revision": 2, "monthly_batch_id": "D09"}}
+      // status ∈ added(新增) changed(值或 treat 改变) removed(退出面板)
+      //          unchanged(不受影响)；added 的 before、removed 的 after 为 null
+    ]
+  },
+  "missing_diff": {                // 待补登记清单前后对比
+    "counts": {"entered": 24, "left": 0, "changed": 0, "unchanged": 0},
+    "rows": [
+      {"region_id": "R003", "month": "2022-01", "status": "entered",
+       "before_reason": null, "after_reason": "no_registration",
+       "monthly_revision": 1, "monthly_batch_id": "D09"}
+      // status ∈ entered(进入待补) left(离开待补) changed(原因变化) unchanged
+      // reason ∈ no_registration / registration_withdrawn / registration_incomplete
+    ]
+  },
+  "predicted_panel": [/* 预测的分析面板全量，列与导出 panel.csv 完全一致 */],
+  "predicted_missing_registration": [/* 预测的待补清单全量，列与导出一致 */],
+  "side_effects": "none",
+  "side_effects_note": "预演在回滚事务内模拟：未留下版本行、当前指针、回执、逐行结果、过时/重复来件记录或导出发布记录；同一 batch_id 之后仍可正式导入，修正文件时仍按原有 batch_id 冲突规则处理。",
+  "elapsed_ms": 12.3
+}
+```
+
+要点：
+
+- **逐行可定位**：面板差异的每一行都带月报与登记的修订号和来源批次
+  （`monthly_revision/batch_id`、`registration_revision/batch_id` 前后两值），
+  不是只有汇总行数。登记日期更正会体现为该地区**所有现存月份**的
+  `changed` 行；撤回登记会显示哪些月报 `removed`（退出面板）并逐月
+  `entered` 待补清单（`registration_withdrawn`）。
+- **可对照正式导出**：`predicted_panel` / `predicted_missing_registration`
+  与正式导出的 `panel.csv` / `missing_registration.csv` 列完全一致；
+  预演后紧接着正式导入同一文件，两者逐行相同（测试覆盖）。
+- **无副作用**：预演不留下版本行、当前指针、回执、逐行结果、过时/重复
+  来件记录或导出发布记录（`sqlite_sequence` 也随回滚还原）。
+- **重放与冲突**：相同文件 + 已有成功回执 → `replay` 报告（不模拟再次
+  生效）；同编号不同内容 → 按正式导入规则拒绝（退出码 2，不写报告）；
+  同版本内容冲突 / 批内冲突 / 单元格校验错误 → `would_reject` 报告，
+  `rejection.offending_rows` 逐行/逐格列出问题记录。
+
+测试钩子（仅并发演练用）：`--pause-inside-tx 秒 --pause-marker 文件`
+在模拟事务内（已持有写锁）暂停，用于验证并发导入时报告边界一致。

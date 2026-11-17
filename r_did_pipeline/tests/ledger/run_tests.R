@@ -32,10 +32,11 @@ results <- lapply(files, function(f) {
 })
 df <- do.call(rbind, results)
 failed <- sum(df$failed)
+errored <- if ("error" %in% names(df)) sum(df$error) else 0L
 warned <- sum(df$warning)
 skipped <- sum(df$skipped)
 cat("\n============================================================\n")
-cat(sprintf("总计: %d 通过 / %d 失败 / %d 警告 / %d 跳过\n",
-            sum(df$passed), failed, warned, skipped))
-if (failed > 0L || warned > 0L) quit(save = "no", status = 1L)
+cat(sprintf("总计: %d 通过 / %d 失败 / %d 错误 / %d 警告 / %d 跳过\n",
+            sum(df$passed), failed, errored, warned, skipped))
+if (failed > 0L || errored > 0L || warned > 0L) quit(save = "no", status = 1L)
 cat("全部通过\n")
