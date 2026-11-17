@@ -20,7 +20,7 @@
 | 协变量全缺地区按规则排除并列明 | 唯一预设规则 `exclude`，写入 `excluded_regions.csv` |
 | 结果文件分别保留各要素 | 估计值/SE/点态与统一 CI/参与组/对照组/有效样本量/事件时间权重/包版本分文件 |
 | 用 did 原始组别结果重算汇总曲线并核对 | `aggregate.R` 双路计算，权重总和=1 核对，等权逐单元格重算自洽性核对 |
-| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出、批次预演影响报告 |
+| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出、批次预演影响报告、覆盖核验 |
 
 ## 2. 目录结构
 
@@ -42,11 +42,13 @@ r_did_pipeline/
 │       ├── ingest.R           # 回执、修订判定、当前指针、过时/重复来件
 │       ├── export.R           # 一致快照导出、临时目录发布
 │       ├── preview.R          # 批次预演：模拟导入 + 面板/待补差异 + 报告发布
+│       ├── coverage.R         # 覆盖核验：覆盖约定解析、逐地区逐月判定、报告发布
 │       ├── query.R            # 当前/历史/回执/批次判定/发布查询
 │       ├── cli.R              # 命令行公共层与 JSON 错误契约
 │       ├── init_ledger.R      # CLI：初始化/校验绑定
 │       ├── import_batch.R     # CLI：导入批次
 │       ├── preview_batch.R    # CLI：批次预演（影响报告，不提交数据）
+│       ├── verify_coverage.R  # CLI：覆盖核验（缺口与例外报告，不改账本）
 │       ├── export_panel.R     # CLI：导出现行月表与来源
 │       ├── query_ledger.R     # CLI：查询账本
 │       ├── make_demo_batches.R# 生成可直接运行的演示批次
@@ -221,11 +223,17 @@ $LEDGER_R R/ledger/preview_batch.R --db "$DB" --batch-id D09 \
   --monthly data/ledger_demo/monthly/d02_monthly.csv \
   --registration data/ledger_demo/registration/d02_registration.csv \
   --report reports/D09_preview.json
+
+# 6) 覆盖核验：按覆盖约定核对地区-月份是否交齐月报（详见 8.10，不改账本）
+$LEDGER_R R/ledger/verify_coverage.R --db "$DB" \
+  --coverage coverage/2024H1.csv --from 2024-01 --to 2024-06 \
+  --report reports/coverage_2024H1.json
 ```
 
 - 所有命令向 stdout 输出**一行 JSON**，日志写 stderr。
 - 退出码：`0` 成功；`2` 可预期的校验/业务拒绝（JSON 里带 `error_code`）；
   `1` 内部错误。`--db` 也可用环境变量 `LEDGER_DB` 提供。
+  例外：`verify_coverage.R` 另用 `3` 表示“核验完成但有待处理项”（见 8.10）。
 - 导入回执中 `"replay": true` 表示这是同批次原文件重传，未重复生效。
 
 ### 8.4 可直接运行的样例批次（`data/ledger_demo/`）
@@ -334,7 +342,7 @@ $LEDGER_R R/ledger/ledger_demo.R --workdir /tmp/ledger_demo
 ```bash
 LEDGER_R=/workspace/.envs/r-ledger/bin/Rscript
 
-# 全部账本测试（临时库；573 项断言；不依赖 did 拟合）
+# 全部账本测试（临时库；886 项断言；不依赖 did 拟合）
 $LEDGER_R tests/ledger/run_tests.R
 $LEDGER_R tests/ledger/run_tests.R concurrency   # 只跑多进程部分
 
@@ -355,6 +363,7 @@ $LEDGER_R R/ledger/concurrency_demo.R --workdir /tmp/ledger_cc --pause 60
 | `test-export.R` | 待补登记、登记撤回、treat 重算、缺月/缺值保留、逐行来源、发布不覆盖、失败保留旧导出、一致快照 |
 | `test-concurrency.R` | **实际启动两个写入进程**并发导入不同批次；同批次两进程一提交一重放；**SIGKILL 停在提交前的导入进程**后核对回执/当前数据/历史记录一致，重启重传只生效一次；CLI 退出码 |
 | `test-preview.R` | 批次预演：混合批次逐行结果与面板/待补差异（含修订来源）、登记更正跨月重算与撤回待补变化、月报删除/恢复、同版本冲突与文件校验错误的整批拒绝报告、已有 batch_id 的重放标记与不同内容拒绝、预演前后账本各表（含 sqlite_sequence）不变、**两进程并发时预演边界与报告一致**、预测面板与紧接着正式导入后的导出逐行对照、报告发布原子性（失败不覆盖已有报告）、CLI 契约 |
+| `test-coverage.R` | 覆盖核验：空账本也能按约定发现缺失月报、豁免与豁免期来件、月报撤回与登记缺失（从未登记/登记撤回）的不同归因、未约定地区/月份的现存月报、约定缺失不默认豁免、跨月边界裁切、重叠/倒置/非法约定拒绝且不覆盖旧报告、核验前后账本各表与回执/导出发布数量不变、**并发导入期间报告只对应一个账本状态**、人工约定对实际账本逐项核对、报告发布原子性、CLI 退出码 0/3/2 |
 | `test-cli.R` | README 中的 CLI 命令可直接运行、幂等初始化、错误 JSON |
 | `test-pipeline-handoff.R` | 导出 `panel.csv` 通过既有 `validate_data.R` 校验；缺月/缺值不被填充 |
 
@@ -475,3 +484,85 @@ $LEDGER_R R/ledger/preview_batch.R --db "$DB" --batch-id D09 \
 
 测试钩子（仅并发演练用）：`--pause-inside-tx 秒 --pause-marker 文件`
 在模拟事务内（已持有写锁）暂停，用于验证并发导入时报告边界一致。
+
+## 8.10 覆盖核验：按业务排期核对地区-月份是否交齐月报
+
+账本只能列出“已经收到”的月报和“因缺少有效上线登记而不能拼入面板”的
+记录；对于完全没有收到的地区-月份，账本不知道该月份本来是否应该上报。
+发布某段地区-月份面板前，运营人员用 `verify_coverage.R` 提供本次核验适用
+的**覆盖约定**，与账本当前状态对照，输出可定位的缺口与例外。**核验不改动
+账本或正式导出**：不新建账本记录、回执或导出发布记录。
+
+```bash
+$LEDGER_R R/ledger/verify_coverage.R --db "$DB" \
+  --coverage coverage/2024H1.csv --from 2024-01 --to 2024-06 \
+  --report reports/coverage_2024H1.json
+```
+
+### 覆盖约定文件（CSV，UTF-8，首行表头，列顺序不限，不允许多余/缺少列）
+
+| 列 | 规则 |
+| --- | --- |
+| `region_id` | 非空字符串（<=512 字节，无控制字符） |
+| `start_month`,`end_month` | 严格 `YYYY-MM` 的闭区间起止月份，不允许倒置 |
+| `status` | `expected`（应报）或 `exempt`（豁免） |
+| `reason` | `exempt` 必须给出非空原因；`expected` 不允许填写 |
+
+- 同一地区的区间不能重叠（即使状态相同）；重叠即矛盾。
+- 文件格式错误、月份无效、区间倒置或相互矛盾时，核验**整体失败**
+  （退出码 2），JSON 错误的 `details` 逐行指出问题（表头为第 1 行，
+  重叠区间的双方都会列出），且不写报告、不覆盖已有报告。
+- 命令只处理与 `[--from, --to]` 相交的约定，区间按范围裁切；完全不相交
+  的约定不参与本次核验。
+- 范围内有约定覆盖的地区，其未被任何约定覆盖的月份**不默认为豁免**，
+  作为 `uncovered`（约定缺失）逐月单独报告。
+
+### 逐地区逐月判定（items）
+
+每个“有约定与范围相交”的地区 × 范围内每个月产生一行明细：
+
+| status | 含义 | 待处理 |
+| --- | --- | --- |
+| `ready_for_panel` | 已有有效月报且登记有效，已具备进入面板的条件 | 否 |
+| `missing_report` | 应报但从未收到月报（账本中没有任何版本行） | 是 |
+| `report_withdrawn` | 月报已撤回（最高修订为 delete 墓碑） | 是 |
+| `missing_registration` | 月报存在但缺少有效上线登记 | 是 |
+| `exempt` | 豁免月（保留豁免原因），无现存来件 | 否 |
+| `exempt_with_delivery` | 豁免期有来件（现存有效月报），不静默计作按期交付 | 是 |
+| `uncovered` | 约定缺失：该地区有约定相交，但该月未被任何约定覆盖 | 是 |
+
+每行字段：`region_id, month, coverage(expected/exempt/none), status,
+actionable, report_state(valid/never_received/withdrawn),
+monthly_record_id, monthly_revision, monthly_batch_id, monthly_received_at,
+registration_state(effective/none/withdrawn/incomplete),
+registration_record_id, registration_revision, registration_batch_id,
+registration_received_at, first_treat_month, exemption_reason, source_row`
+（`source_row` 为覆盖约定来源行；缺失值显式输出为 `null`）。
+
+另设 `unscheduled_reports`：账本中落在本次月份范围内、却不属于任何应报
+约定的**现存有效月报**逐条列出（`covered_by = none` 表示该月没有任何
+约定，`exempt` 表示该月为豁免月、同时已列入 `exempt_with_delivery`），
+避免排期文件漏掉地区后多余数据消失在汇总里。`summary` 给出各类计数与
+`n_actionable`；**汇总数字不替代明细**。
+
+### 一致性与发布
+
+- 全部账本读取在**单个只读事务（固定快照）**内完成：并发导入不会让
+  部分地区按导入前、部分按导入后的数据判定。报告 `state_boundary` 给出
+  可复核的账本边界（最大 record_id、版本行计数、sqlite data_version），
+  并注明结论只适用于本次读取的状态。
+- 报告全部生成成功后才写入 `--report` 指定位置（同目录临时文件 + 原子
+  重命名）；输入错误、核验失败或发布失败时不覆盖已有报告。
+- 有效核验即使发现缺口也会发布完整报告。
+
+### 退出码
+
+| 码 | 含义 |
+| --- | --- |
+| `0` | 核验完成，无缺口也无待处理项（`verdict = clean`） |
+| `3` | 核验完成，有待处理项（`verdict = findings`；报告已完整发布） |
+| `2` | 输入错误或核验被拒绝（约定文件非法、范围非法、库问题等；不写报告） |
+| `1` | 内部错误 |
+
+测试钩子（仅并发演练用）：`--pause-inside-snapshot 秒 --pause-marker 文件`
+在只读快照内暂停，用于验证并发导入时报告只对应一个账本状态。

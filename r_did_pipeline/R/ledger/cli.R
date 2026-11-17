@@ -77,13 +77,17 @@ json_out <- function(obj) {
   flush(stdout())
 }
 
-# 统一入口：tryCatch -> JSON 错误，退出码 2（业务）或 1（内部错误）
-run_cli <- function(opts, fn) {
+# 统一入口：tryCatch -> JSON 错误，退出码 2（业务）或 1（内部错误）。
+# exit_status 可选：成功路径上调用的函数，返回命令特定的退出码
+# （如覆盖核验用 3 区分“核验完成但有待处理项”）；缺省保持退出码 0。
+run_cli <- function(opts, fn, exit_status = NULL) {
   t0 <- Sys.time()
   tryCatch({
     res <- fn(opts)
     res$ok <- TRUE
     json_out(res)
+    if (is.function(exit_status))
+      quit(save = "no", status = as.integer(exit_status(res)))
     invisible(0L)
   }, ledger_error = function(e) {
     json_out(list(ok = FALSE, error_code = e$code,
