@@ -20,7 +20,8 @@
 here <- dirname(normalizePath(sub("--file=", "",
           grep("--file=", commandArgs(FALSE), value = TRUE)[1]), mustWork = FALSE))
 source(file.path(here, "cli.R"), local = FALSE)
-load_ledger_lib()
+load_ledger_lib(c("core.R", "validate.R", "ingest.R", "export.R", "query.R",
+                  "boundary.R"))
 
 opts <- parse_cli(commandArgs(trailingOnly = TRUE))
 
@@ -40,7 +41,14 @@ run_cli(opts, function(o) {
       dataframe = "rows"), simplifyVector = FALSE)
   }
   body <- switch(what,
-    snapshot = ledger_snapshot(con),
+    snapshot = c(ledger_snapshot(con),
+      if (has_table(con, "baseline_meta")) list(
+        baseline = if (has_baseline(con))
+          as.list(DBI::dbGetQuery(con,
+            "SELECT * FROM baseline_meta WHERE baseline_id = ?",
+            list(BASELINE_ID))[1, ]) else NULL,
+        n_commit_boundaries = DBI::dbGetQuery(con,
+          "SELECT COUNT(*) AS n FROM commit_boundary")$n) else NULL),
     `current-monthly` = query_current_monthly(con, region_id, month),
     `history-monthly` = query_monthly_history(con, region_id, month),
     `current-registration` = query_current_registration(con, region_id),
@@ -49,6 +57,8 @@ run_cli(opts, function(o) {
     outcomes = query_outcomes(con, batch_id),
     arrivals = query_arrivals(con, batch_id),
     releases = query_releases(con),
+    # 可重建边界：基线（seq=0）+ 之后每个成功提交批次的唯一提交顺序
+    boundaries = query_boundaries(con),
     check = check_ledger_invariants(con),
     stop_ledger("unknown_what", paste0("未知查询类型: ", what))
   )

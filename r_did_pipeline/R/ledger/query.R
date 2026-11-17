@@ -187,6 +187,45 @@ check_ledger_invariants <- function(con) {
      WHERE NOT EXISTS (SELECT 1 FROM ingest_outcome o WHERE o.batch_id = r.batch_id)")
   # 允许“只有重复行/空应用”的批次没有 outcome，但 committed 批次必须至少
   # 有版本行或 outcome 之一（防止空事务也留回执，这不是错误，只做提示）。
+  boundary_problems <- list()
+  if (has_table(con, "commit_boundary")) {
+    # 1) commit_seq 必须从 1 开始、严格连续无空洞（唯一由主键与 UNIQUE 保证）
+    seqs <- DBI::dbGetQuery(con,
+      "SELECT commit_seq FROM commit_boundary ORDER BY commit_seq")$commit_seq
+    if (length(seqs) > 0L &&
+        !identical(as.integer(seqs), seq_len(length(seqs))))
+      boundary_problems$commit_seq_not_contiguous <- seqs
+    # 2) 每个边界必须指向一条 committed 回执，且文件 md5 与回执一致
+    orphan <- DBI::dbGetQuery(con, "
+      SELECT b.batch_id FROM commit_boundary b
+       LEFT JOIN receipt r ON r.batch_id = b.batch_id
+      WHERE r.batch_id IS NULL
+         OR r.status <> 'committed'
+         OR r.file_md5 <> b.file_md5")
+    if (nrow(orphan) > 0L)
+      boundary_problems$boundary_without_matching_receipt <- orphan
+    # 3) 新建账本（fresh_init）不存在“基线以前的成功回执”，因此 committed
+    #    回执与提交边界必须一一对应；升级账本的基线以前回执没有边界是设计
+    #    使然（见 baseline_meta.origin），不做该方向检查。
+    origin <- if (has_table(con, "baseline_meta"))
+      DBI::dbGetQuery(con,
+        "SELECT origin FROM baseline_meta WHERE baseline_id='baseline-0'")$origin
+      else character(0)
+    if (length(origin) == 1L && identical(origin[[1]], "fresh_init")) {
+      miss <- DBI::dbGetQuery(con, "
+        SELECT r.batch_id FROM receipt r
+         WHERE r.status = 'committed'
+           AND NOT EXISTS (SELECT 1 FROM commit_boundary b
+                            WHERE b.batch_id = r.batch_id)")
+      if (nrow(miss) > 0L)
+        boundary_problems$committed_receipt_without_boundary <- miss
+    }
+  }
+  if (has_table(con, "baseline_meta") &&
+      DBI::dbGetQuery(con, "SELECT COUNT(*) n FROM baseline_meta")$n != 1L)
+    boundary_problems$baseline_not_unique <-
+      DBI::dbGetQuery(con, "SELECT baseline_id FROM baseline_meta")
+  bad <- c(bad, boundary_problems)
   list(consistent = length(bad) == 0L, problems = bad,
        receipts_without_outcomes = bare_receipts$batch_id)
 }

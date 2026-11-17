@@ -21,8 +21,10 @@ test_that("README 中的 CLI 命令可直接运行", {
   r <- run("init_ledger.R", c("--db", db, "--source-id", "SRC-CLI"))
   expect_equal(r$status, 0L)
   expect_equal(r$json$action, "created")
-  expect_equal(r$json$schema_version, 1L)
+  expect_equal(r$json$schema_version, 2L)
+  expect_equal(r$json$baseline$origin, "fresh_init")
   expect_true("monthly_version" %in% r$json$tables)
+  expect_true("commit_boundary" %in% r$json$tables)
 
   # 幂等初始化
   r <- run("init_ledger.R", c("--db", db, "--source-id", "SRC-CLI"))

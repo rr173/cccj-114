@@ -1,5 +1,5 @@
 # =============================================================================
-# core.R —— 接入账本的连接、表结构、初始化与升级（schema v1）
+# core.R —— 接入账本的连接、表结构、初始化与升级（schema v2）
 #
 # 设计约束：
 #  * 每个 SQLite 文件只绑定一个 source_id（存于 meta，不提供改绑命令）；
@@ -11,6 +11,15 @@
 #    派生：同 revision 不允许两种内容，因此 delete 一旦拿到最高修订号，
 #    低版本 upsert 即使后到也只能进入历史，不能复活数据；
 #  * 版本行 append-only；当前指针表可更新，但每次都在同一事务内与版本行一致。
+#
+# v2 新增“提交边界”能力（见 boundary.R 与 rebuild.R）：
+#  * commit_boundary 表按账本内提交顺序（commit_seq，写锁内分配、无并发窗口）
+#    唯一记录每个成功提交的导入批次；边界只能来自账本提交顺序，不使用文件名、
+#    调用时间或月报 revision 推断先后；
+#  * 失败事务不写回执也不占边界；同 batch_id 同内容重传返回原回执，不新增边界；
+#  * v1 老账本升级时无法恢复精确的历史批次顺序：升级在单个事务内把升级瞬间
+#    的有效账本状态冻结为基线（baseline_*），基线即为该账本可重建历史的起点；
+#    基线以前的旧 batch_id 不会被假称为可精确重建的时点。
 # =============================================================================
 
 suppressPackageStartupMessages({
@@ -19,8 +28,13 @@ suppressPackageStartupMessages({
   library(data.table)
 })
 
-LEDGER_SCHEMA_VERSION <- 1L
+LEDGER_SCHEMA_VERSION <- 2L
 LEDGER_MAX_REVISION <- 2147483647L
+
+# 基线/边界类型常量
+BOUNDARY_KIND_BASELINE <- "baseline"     # 历史起点（升级冻结点或新建账本空起点）
+BOUNDARY_KIND_BATCH <- "batch"           # 一次成功提交的导入批次
+REBUILD_BASELINE_BATCH_ID <- "__baseline__"
 
 # ---- 错误对象：命令层把错误转为 JSON（退出码 2），测试可直接断言 class ----
 ledger_error <- function(code, message, details = NULL) {
@@ -268,6 +282,62 @@ schema_ddl <- function() {
       "  n_rows INTEGER NOT NULL,",
       "  PRIMARY KEY (release_id, file_name),",
       "  FOREIGN KEY (release_id) REFERENCES export_release(release_id)",
+      ")"),
+    # ---- v2：提交边界 -------------------------------------------------------
+    # 每个成功提交的导入批次在此恰好占一行；commit_seq 在持有 BEGIN IMMEDIATE
+    # 写锁时分配，因此它是“账本记录的提交顺序”，与文件名、调用时间、
+    # revision 大小都无关，并发成功批次也有唯一且可核对的先后。
+    # commit_seq=0 保留给基线（baseline_* 表承载基线内容，不写本表）。
+    commit_boundary = paste(
+      "CREATE TABLE IF NOT EXISTS commit_boundary (",
+      "  commit_seq INTEGER PRIMARY KEY CHECK (commit_seq > 0),",
+      "  batch_id TEXT NOT NULL UNIQUE,",
+      "  source_id TEXT NOT NULL,",
+      "  file_md5 TEXT NOT NULL,",
+      "  receipt_status TEXT NOT NULL CHECK (receipt_status = 'committed'),",
+      "  committed_at TEXT NOT NULL,",
+      "  FOREIGN KEY (batch_id) REFERENCES receipt(batch_id)",
+      ")"),
+    # ---- v2：历史起点基线 ---------------------------------------------------
+    # 升级（v1->v2）时在同一事务内把“升级瞬间的有效账本状态”冻结到这里；
+    # 新建账本则冻结一个等价的空基线。基线之前的历史批次顺序不可恢复，
+    # 因此基线是该账本可精确重建的最早时点。
+    baseline_meta = paste(
+      "CREATE TABLE IF NOT EXISTS baseline_meta (",
+      "  baseline_id TEXT PRIMARY KEY,",
+      "  source_id TEXT NOT NULL,",
+      "  schema_version_at_capture INTEGER NOT NULL,",
+      "  created_at TEXT NOT NULL,",
+      "  origin TEXT NOT NULL CHECK (origin IN ('fresh_init','upgrade_v1')),",
+      "  n_monthly_current INTEGER NOT NULL,",
+      "  n_registration_current INTEGER NOT NULL,",
+      "  max_monthly_record_id INTEGER NOT NULL,",
+      "  max_registration_record_id INTEGER NOT NULL,",
+      "  snapshot_note TEXT NOT NULL",
+      ")"),
+    baseline_monthly = paste(
+      "CREATE TABLE IF NOT EXISTS baseline_monthly (",
+      "  region_id TEXT NOT NULL,",
+      "  month TEXT NOT NULL,",
+      "  record_id INTEGER NOT NULL,",
+      "  revision INTEGER NOT NULL,",
+      "  op TEXT NOT NULL CHECK (op IN ('upsert','delete')),",
+      "  y REAL, x1 REAL, x2 REAL,",
+      "  batch_id TEXT NOT NULL,",
+      "  received_at TEXT NOT NULL,",
+      "  payload TEXT NOT NULL,",
+      "  PRIMARY KEY (region_id, month)",
+      ")"),
+    baseline_registration = paste(
+      "CREATE TABLE IF NOT EXISTS baseline_registration (",
+      "  region_id TEXT PRIMARY KEY,",
+      "  record_id INTEGER NOT NULL,",
+      "  revision INTEGER NOT NULL,",
+      "  op TEXT NOT NULL CHECK (op IN ('upsert','delete')),",
+      "  first_treat_month TEXT,",
+      "  batch_id TEXT NOT NULL,",
+      "  received_at TEXT NOT NULL,",
+      "  payload TEXT NOT NULL",
       ")")
   )
 }
@@ -282,13 +352,32 @@ create_schema <- function(con, source_id) {
     DBI::dbExecute(con, "INSERT INTO meta(key, value) VALUES (?, ?)",
                    list(kv[[1]], kv[[2]]))
   }
+  # 新建账本的等价起点：冻结空基线（v2 表已建，当前有效状态为空）。
+  # 与升级路径共用 capture_baseline_tx，保证两种账本的起点同构、可复核。
+  capture_baseline_tx(con, "fresh_init")
   invisible(TRUE)
 }
 
 # ---- 升级策略 ----------------------------------------------------------------
-# v1 是首个版本。未来升级时在此登记 (from, to, function(con))；
-# 升级必须在 BEGIN IMMEDIATE 内，失败则回滚，库保持旧版本。
-SCHEMA_MIGRATIONS <- list()
+# v1 -> v2：
+#   * 建立 commit_boundary / baseline_meta / baseline_monthly /
+#     baseline_registration 四张新表；
+#   * 在同一个 BEGIN IMMEDIATE 事务内把升级瞬间的有效账本状态冻结为基线，
+#     再推进 meta.schema_version；任何一步失败整体回滚，库保持 v1；
+#   * 幂等：升级中断后重试时，若基线已存在则只补齐缺失的 DDL/版本号，
+#     绝不重复冻结基线，也不触碰既有版本行、当前指针与回执。
+SCHEMA_MIGRATIONS <- list(
+  `1` = function(con) {
+    ddl <- schema_ddl()
+    for (nm in c("commit_boundary", "baseline_meta",
+                 "baseline_monthly", "baseline_registration"))
+      DBI::dbExecute(con, ddl[[nm]])
+    if (!has_baseline(con))
+      capture_baseline_tx(con, "upgrade_v1")
+    else
+      ledger_log("基线已存在，升级重试不重复冻结")
+  }
+)
 
 upgrade_schema <- function(con, quiet = FALSE) {
   meta <- ledger_meta(con)

@@ -251,7 +251,7 @@ test_that("相同 source_id/batch_id 原文件重传跨连接也返回原回执"
 
 test_that("schema 版本门禁与升级策略", {
   L <- new_temp_ledger(); on.exit(L$close(), add = TRUE)
-  expect_equal(ledger_meta(L$con)$schema_version, "1")
+  expect_equal(ledger_meta(L$con)$schema_version, "2")
   close_ledger(L$con)
 
   # 库版本高于代码：拒绝打开
@@ -276,6 +276,6 @@ test_that("schema 版本门禁与升级策略", {
   on.exit({ SCHEMA_MIGRATIONS <<- old }, add = TRUE)
   expect_equal(init_ledger(L$db, "SRC-TEST")$status, "exists")
   con2 <- open_ledger(L$db, quiet = TRUE)
-  expect_equal(ledger_meta(con2)$schema_version, "1")
+  expect_equal(ledger_meta(con2)$schema_version, "2")
   close_ledger(con2)
 })

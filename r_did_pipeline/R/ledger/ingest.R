@@ -491,6 +491,12 @@ ingest_tx_core <- function(con, monthly, registration, batch_id, content_md5,
            jsonlite::toJSON(summary, auto_unbox = TRUE, null = "null",
                             digits = NA),
            received_at))
+    # 提交边界：与回执在同一写事务内按账本提交顺序分配 commit_seq。
+    # 失败事务在到达这里之前就已回滚，不占边界；重放走 check_replay 分支，
+    # 也不会到达这里，因此同 batch_id 同内容重传永远不产生新边界。
+    commit_seq <- record_commit_boundary_tx(con, batch_id, source_id,
+                                            content_md5, received_at)
+    summary$commit_seq <- commit_seq
     # 依赖 receipt 的外键行必须在回执之后写
     write_outcome_rows(con, m$outcomes, LEDGER_KIND_MONTHLY, batch_id)
     write_outcome_rows(con, r$outcomes, LEDGER_KIND_REGISTRATION, batch_id)

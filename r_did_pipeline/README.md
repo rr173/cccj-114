@@ -20,7 +20,7 @@
 | 协变量全缺地区按规则排除并列明 | 唯一预设规则 `exclude`，写入 `excluded_regions.csv` |
 | 结果文件分别保留各要素 | 估计值/SE/点态与统一 CI/参与组/对照组/有效样本量/事件时间权重/包版本分文件 |
 | 用 did 原始组别结果重算汇总曲线并核对 | `aggregate.R` 双路计算，权重总和=1 核对，等权逐单元格重算自洽性核对 |
-| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出、批次预演影响报告、覆盖核验 |
+| 逐批接入数据（见第 8 节） | `R/ledger/` 接入账本：DBI + RSQLite，修订号判定、删除墓碑、可重放回执、一致快照导出、批次预演影响报告、覆盖核验、提交边界与按批次的历史面板重建（schema v2） |
 
 ## 2. 目录结构
 
@@ -37,20 +37,23 @@ r_did_pipeline/
 │   ├── make_synthetic.R   # 合成数据生成器（含真值与数据质量注入）
 │   ├── validate_pipeline.R# 28 项验收断言
 │   └── ledger/            # 接入账本（本增量，见第 8 节）
-│       ├── core.R             # 连接、schema v1、初始化、升级策略、事务封装
+│       ├── core.R             # 连接、schema v2、初始化、升级策略、事务封装
+│       ├── boundary.R         # 提交边界（commit_seq）与历史起点基线（baseline）
 │       ├── validate.R         # 批次文件格式与逐行校验（纯函数）
 │       ├── ingest.R           # 回执、修订判定、当前指针、过时/重复来件
 │       ├── export.R           # 一致快照导出、临时目录发布
+│       ├── rebuild.R          # 按已提交批次边界的时间旅行重建（只读面板）
 │       ├── preview.R          # 批次预演：模拟导入 + 面板/待补差异 + 报告发布
 │       ├── coverage.R         # 覆盖核验：覆盖约定解析、逐地区逐月判定、报告发布
-│       ├── query.R            # 当前/历史/回执/批次判定/发布查询
+│       ├── query.R            # 当前/历史/回执/批次判定/发布/边界查询
 │       ├── cli.R              # 命令行公共层与 JSON 错误契约
-│       ├── init_ledger.R      # CLI：初始化/校验绑定
+│       ├── init_ledger.R      # CLI：初始化/校验绑定（含 v1->v2 升级与基线）
 │       ├── import_batch.R     # CLI：导入批次
 │       ├── preview_batch.R    # CLI：批次预演（影响报告，不提交数据）
 │       ├── verify_coverage.R  # CLI：覆盖核验（缺口与例外报告，不改账本）
 │       ├── export_panel.R     # CLI：导出现行月表与来源
-│       ├── query_ledger.R     # CLI：查询账本
+│       ├── rebuild_panel.R    # CLI：按批次边界重建历史面板（只读，不改账本）
+│       ├── query_ledger.R     # CLI：查询账本（含 --what boundaries）
 │       ├── make_demo_batches.R# 生成可直接运行的演示批次
 │       ├── ledger_demo.R      # 场景演示（月报/登记解挂、乱序、删除恢复、更正、冲突、中断）
 │       └── concurrency_demo.R # 实际启动多进程 + SIGKILL 演练
@@ -218,6 +221,12 @@ $LEDGER_R R/ledger/query_ledger.R --db "$DB" --what check      # 不变量自检
 # 4) 导出（每次生成新的 release 目录，不覆盖旧导出）
 $LEDGER_R R/ledger/export_panel.R --db "$DB" --out "$OUT"
 
+# 4b) 按已提交批次边界重建历史面板（只读，详见 8.11）
+$LEDGER_R R/ledger/query_ledger.R --db "$DB" --what boundaries
+$LEDGER_R R/ledger/rebuild_panel.R --db "$DB" --batch-id D03 --out rebuilds
+# 也可重建基线时点（升级冻结点或新建账本的空起点）
+$LEDGER_R R/ledger/rebuild_panel.R --db "$DB" --batch-id __baseline__ --out rebuilds
+
 # 5) 批次预演：生成影响报告但不提交数据（详见 8.9）
 $LEDGER_R R/ledger/preview_batch.R --db "$DB" --batch-id D09 \
   --monthly data/ledger_demo/monthly/d02_monthly.csv \
@@ -312,7 +321,7 @@ $LEDGER_R R/ledger/ledger_demo.R --workdir /tmp/ledger_demo
   `exports/<release_id>/panel.csv`，其余列名映射已匹配（`R/validate_data.R`
   可直接校验，测试 `test-pipeline-handoff.R` 覆盖该契约，不调用 did 拟合）。
 
-### 8.7 表结构（schema v1）与升级策略
+### 8.7 表结构（schema v2）与升级策略
 
 | 表 | 作用 |
 | --- | --- |
@@ -324,27 +333,46 @@ $LEDGER_R R/ledger/ledger_demo.R --workdir /tmp/ledger_demo
 | `registration_current` | 每个 `region_id` 的当前 `record_id` 指针 |
 | `ingest_outcome` | 逐批逐行判定（`insert/replace/restore/delete/duplicate/stale`） |
 | `arrival_log` | 过时/重复来件的完整内容（不进版本表，仍可查询） |
-| `export_release` / `export_file` | 每次成功导出的清单与逐文件哈希 |
+| `export_release` / `export_file` | 每次成功**普通导出**的清单与逐文件哈希（重建不登记） |
+| `commit_boundary` | **v2**：每个成功提交批次一行；`commit_seq` 在写锁内按账本提交顺序分配，严格递增、无空洞、全局唯一 |
+| `baseline_meta` | **v2**：历史起点基线的元数据（`fresh_init` 空起点 / `upgrade_v1` 升级冻结点） |
+| `baseline_monthly` / `baseline_registration` | **v2**：基线瞬间冻结的当前有效月报/登记（含 delete 墓碑） |
 
 当前有效记录 = 该业务键**最高 revision** 的版本行；由于同版本内容冲突被禁止，
 `delete` 一旦取得最高修订号就无法被低版本或同版本覆盖，只能被更高版本 upsert 恢复。
 `monthly_current`/`registration_current` 只是查询加速指针，`query_ledger.R --what check`
 会校验它与版本表一致。
 
-**升级策略**：`LEDGER_SCHEMA_VERSION` 当前为 `1`。未来变更在
-`R/ledger/core.R` 的 `SCHEMA_MIGRATIONS` 中登记 `from -> to` 迁移函数；
-`init_ledger.R` 与导入/导出入口都会先检查版本：
-库版本高于代码则拒绝（`schema_newer_than_code`），低于代码则在
-`BEGIN IMMEDIATE` 内执行迁移并回滚失败，保证库要么完整升级要么保持旧版本。
+**提交边界（commit_boundary）**：边界顺序**只来自账本记录的提交顺序**——
+每个成功批次在 `BEGIN IMMEDIATE` 写锁内、与回执同一事务分配 `commit_seq`，
+不使用文件名、调用时间（`received_at`）或月报 revision 推断先后；
+并发成功批次按拿到写锁的先后得到唯一且可核对的顺序。失败事务不写回执也不占
+序号；同 `batch_id` 同内容重放返回原回执，不产生新边界。`commit_seq=0` 保留给基线。
+
+**升级策略（v1 -> v2）**：`LEDGER_SCHEMA_VERSION` 当前为 `2`。
+
+- 老账本的精确历史批次顺序在 v1 中没有记录、不可恢复，因此升级**不假造历史**：
+  在单个 `BEGIN IMMEDIATE` 事务内建好四张 v2 表，并把**升级瞬间可见的当前有效
+  账本状态**（月报/登记当前指针指向的全部行，含 delete 墓碑）冻结到
+  `baseline_*` 表，作为该账本可精确重建的最早时点（`origin='upgrade_v1'`）。
+- 基线**以前**的旧 `batch_id` 在重建时被明确拒绝（`batch_before_baseline`），
+  不会被假称为可精确重建的时点；基线**以后**成功提交的批次全部可重建。
+- 新建账本在同一套建库事务内冻结等价的空基线（`origin='fresh_init'`），
+  起点同构、可复核；第一个成功批次即 `commit_seq=1`。
+- 升级中断后重试是幂等的：基线已存在时不重复冻结，只补齐缺失的 DDL 与版本号，
+  既有版本行、当前指针与回执不丢失、不重复（测试 `test-rebuild.R` 覆盖回滚后重试）。
+- 库版本高于代码则拒绝（`schema_newer_than_code`）；迁移失败整体回滚，
+  库保持旧版本。迁移函数登记在 `R/ledger/core.R` 的 `SCHEMA_MIGRATIONS`。
 
 ### 8.8 自动测试与多进程演练
 
 ```bash
 LEDGER_R=/workspace/.envs/r-ledger/bin/Rscript
 
-# 全部账本测试（临时库；886 项断言；不依赖 did 拟合）
+# 全部账本测试（临时库；992 项断言；不依赖 did 拟合）
 $LEDGER_R tests/ledger/run_tests.R
 $LEDGER_R tests/ledger/run_tests.R concurrency   # 只跑多进程部分
+$LEDGER_R tests/ledger/run_tests.R rebuild       # 只跑历史重建部分
 
 # 场景演示（月报/登记解挂、乱序修订、重复报送、删除与恢复、更正重算、混合冲突、中断点）
 $LEDGER_R R/ledger/ledger_demo.R --workdir /tmp/ledger_demo
@@ -366,6 +394,7 @@ $LEDGER_R R/ledger/concurrency_demo.R --workdir /tmp/ledger_cc --pause 60
 | `test-coverage.R` | 覆盖核验：空账本也能按约定发现缺失月报、豁免与豁免期来件、月报撤回与登记缺失（从未登记/登记撤回）的不同归因、未约定地区/月份的现存月报、约定缺失不默认豁免、跨月边界裁切、重叠/倒置/非法约定拒绝且不覆盖旧报告、核验前后账本各表与回执/导出发布数量不变、**并发导入期间报告只对应一个账本状态**、人工约定对实际账本逐项核对、报告发布原子性、CLI 退出码 0/3/2 |
 | `test-cli.R` | README 中的 CLI 命令可直接运行、幂等初始化、错误 JSON |
 | `test-pipeline-handoff.R` | 导出 `panel.csv` 通过既有 `validate_data.R` 校验；缺月/缺值不被填充 |
+| `test-rebuild.R` | **历史重建（v2）**：v1 老账本升级基线与升级时当前导出逐格相同；升级中断回滚后重试不重复基线/不丢数据；升级后混合批次同边界重建月报与登记；旧边界读不到后来的高修订、低修订晚到/delete 墓碑/高版本恢复在时间旅行视图遵循账本规则；登记墓碑与恢复；并发批次 `commit_seq` 唯一无空洞且重建与提交顺序一致；失败批次与同内容重放不制造新边界；重建纯只读（当前导出/指针/回执/`export_release` 不变）、重复重建逐字节一致且可被分析入口读取；写出失败与目录已存在不覆盖旧结果；未知/失败/基线以前的 `batch_id` 明确拒绝且不产生目录；新建账本空基线可复核 |
 
 > 账本测试与 `validate_pipeline.R` 相互独立：前者只验证接入、拼接与导出契约，
 > 不调用 `did::att_gt`，因此在没有 did 的环境中也能全部通过。
@@ -566,3 +595,69 @@ registration_received_at, first_treat_month, exemption_reason, source_row`
 
 测试钩子（仅并发演练用）：`--pause-inside-snapshot 秒 --pause-marker 文件`
 在只读快照内暂停，用于验证并发导入时报告只对应一个账本状态。
+
+## 8.11 按已提交批次重建历史分析面板（时间旅行，只读）
+
+普通导出只反映账本**当前**有效修订。月报或上线登记被更正后，复核者要复算
+“上一次分析当时使用的地区月表”，不能再仅凭当前账本得到。v2 账本按提交边界
+保留了完整的可重建历史，`rebuild_panel.R` 指定一个成功批次，即可重建**该批次
+提交完成后账本所代表的面板状态**，产出与普通导出同形同规则的四个 CSV，
+可直接把 `panel.csv` 交给现有分析管线（`config/ledger_export.json`）重跑。
+
+### 命令与可重建范围
+
+```bash
+# 先查看可重建边界：基线（commit_seq=0）+ 之后每个成功提交批次的唯一顺序
+$LEDGER_R R/ledger/query_ledger.R --db "$DB" --what boundaries
+
+# 重建某成功批次提交后的面板（也接受保留基线标识 __baseline__）
+$LEDGER_R R/ledger/rebuild_panel.R --db "$DB" --batch-id D03 --out rebuilds
+```
+
+产出 `rebuilds/rebuild-seq<NNNNNNNNNN>-<batch_id>/`，目录名对同一账本同一边界
+**确定且唯一**；重复重建到同一 `--out` 会被 `rebuild_output_exists` 拒绝，
+不会覆盖已有结果（要保留多次结果请更换 `--out` 根目录）。
+
+### 边界与修订语义
+
+- **边界只来自账本提交顺序**：目标 `batch_id` 必须在 `commit_boundary` 中有
+  成功提交记录；选择截至该 `commit_seq` 已提交的版本行，在**单个固定只读
+  快照**内完成全部读取，边界之后提交的更正不会泄漏。
+- 每个业务键在“截至该边界已提交”的版本中取**最高 revision** 决定状态，规则与
+  现行导出完全一致：`delete` 墓碑继续屏蔽旧月报/登记，晚到的较低 revision
+  不能复活记录，只有更高 revision 的 upsert 能恢复；同批导入的月报与登记共享
+  同一个边界。
+- 升级基线之前的状态来自冻结的 `baseline_*` 表；基线之后的版本用
+  `commit_boundary.commit_seq` 过滤（不依赖时间戳，时间戳可能同秒或回拨）。
+
+### 拒绝契约（退出码 2，JSON 带 `error_code`，不产生结果目录）
+
+| `error_code` | 触发条件 |
+| --- | --- |
+| `unknown_batch` | 账本回执中不存在该 `batch_id`（含失败事务——失败不写回执、不占边界） |
+| `batch_not_committed` | 对应回执不是成功提交 |
+| `batch_before_baseline` | 升级冻结点以前的旧 `batch_id`：精确提交顺序不可恢复，不假称可重建 |
+| `boundary_not_available` | 账本尚未完成 v2 升级（缺少基线） |
+| `rebuild_output_exists` | 目标结果目录已存在（保护既有重建结果） |
+| `invalid_output_dir` / `rebuild_write_failed` / `rebuild_publish_failed` | 输出根目录不可用或写出/发布失败 |
+
+### 结果身份字段（`manifest.json`）
+
+- `target`：`kind`（`baseline`/`batch`）、`batch_id`、`commit_seq`；批次边界
+  另附 `receipt`（含回执 `file_md5`、`received_at`）与 `boundary_row`；
+- `source_id`、`db_path`、`db_identity`（schema 版本、sqlite data_version）：
+  账本/来源身份；
+- `baseline`：基线 id、来源（`fresh_init`/`upgrade_v1`）、冻结时间与计数、说明；
+- `boundary_order`：基线与全部成功批次的完整提交顺序（seq、batch_id、kind、
+  来源、文件 md5、提交时间），可与 `--what boundaries` 逐项核对；
+- `files`：四个 CSV 的逐文件 **md5 校验值**与行数；`side_effects="read_only"`。
+
+### 只读保证与可重复性
+
+- 重建**不改写**当前指针、版本历史、回执或提交边界，也**不登记**
+  `export_release`；历史输出不会成为后续普通导出的当前状态。
+- 同一边界重复重建（写到不同目录）得到逐字节相同的四个 CSV 与相同的
+  target/baseline/boundary 身份；测试 `test-rebuild.R` 覆盖该一致性，并验证
+  重建结果可被现有 `validate_data.R` 分析入口直接读取。
+- 写同级临时目录 `.staging-rebuild-*`，全部成功后才目录重命名发布；任何失败
+  都不覆盖调用者已有的结果目录。

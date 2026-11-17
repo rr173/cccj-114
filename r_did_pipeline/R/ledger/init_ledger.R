@@ -31,10 +31,20 @@ run_cli(opts, function(o) {
     on.exit(close_ledger(con), add = TRUE)
   }
   snap <- ledger_snapshot(con)
+  baseline <- if (has_baseline(con))
+    as.list(DBI::dbGetQuery(con,
+      "SELECT baseline_id, origin, created_at, n_monthly_current,
+              n_registration_current
+         FROM baseline_meta WHERE baseline_id = ?",
+      list(BASELINE_ID))[1, ]) else NULL
   list(action = res$status,
        db_path = normalizePath(db, mustWork = TRUE),
        source_id = snap$source_id,
        schema_version = snap$schema_version,
+       baseline = baseline,
+       n_commit_boundaries = if (has_table(con, "commit_boundary"))
+         DBI::dbGetQuery(con, "SELECT COUNT(*) AS n FROM commit_boundary")$n
+       else 0L,
        journal_mode = snap$journal_mode,
        tables = sort(DBI::dbListTables(con)))
 })

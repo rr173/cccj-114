@@ -23,8 +23,8 @@ ledger_root <- function() {
   normalizePath(getwd(), mustWork = FALSE)
 }
 
-load_ledger_lib <- function(files = c("core.R", "validate.R", "ingest.R",
-                                      "export.R", "query.R")) {
+load_ledger_lib <- function(files = c("core.R", "boundary.R", "validate.R",
+                                      "ingest.R", "export.R", "query.R")) {
   root <- ledger_root()
   for (f in files) {
     p <- file.path(root, "R", "ledger", f)
